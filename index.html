@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex"><meta name="referrer" content="no-referrer"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src https: data: blob:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src https: wss:"><title>Mesa de Cena · Mapa ao vivo</title>
+<style>
+:root{color-scheme:dark;--bg:#0c110f;--bar:#151c18;--line:#2f3d35;--text:#e8eee6;--muted:#92a69b;--accent:#e4a847}
+*{box-sizing:border-box}html,body{height:100%;margin:0}
+body{display:flex;flex-direction:column;background:var(--bg);color:var(--text);font:15px/1.4 "Segoe UI",system-ui,-apple-system,sans-serif;overflow:hidden}
+header{display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--bar);border-bottom:1px solid var(--line);flex:none}
+#tabs{display:flex;gap:6px;overflow-x:auto;flex:1;min-width:0}
+#tabs button{white-space:nowrap;border:1px solid var(--line);background:transparent;color:var(--muted);padding:5px 12px;border-radius:9px;font:inherit;cursor:pointer}
+#tabs button.on{border-color:var(--accent);color:var(--text);background:#202a24}
+#tabs .t{font-weight:600;color:var(--text);padding:5px 2px}
+#me{border:1px solid var(--line);background:transparent;color:var(--muted);padding:4px 10px;border-radius:9px;font:inherit;font-size:13px;cursor:pointer;white-space:nowrap;max-width:40vw;overflow:hidden;text-overflow:ellipsis}
+#me:hover{color:var(--text);border-color:var(--accent)}
+#live{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:13px;flex:none}
+#dot{width:9px;height:9px;border-radius:50%;background:#e0554a}
+#live.on #dot{background:#5cc46f;box-shadow:0 0 0 0 rgba(92,196,111,.6);animation:p 2s infinite}
+@keyframes p{70%{box-shadow:0 0 0 8px rgba(92,196,111,0)}100%{box-shadow:0 0 0 0 rgba(92,196,111,0)}}
+@media (prefers-reduced-motion:reduce){#live.on #dot{animation:none}}
+main{position:relative;flex:1;min-height:0;overflow:hidden;touch-action:none;cursor:grab;background:#080b0a}
+main.drag{cursor:grabbing}
+[hidden]{display:none!important}
+#wrap{position:absolute;transform-origin:0 0;user-select:none}
+#wrap img{position:absolute;display:block;-webkit-user-drag:none;user-select:none;pointer-events:none}
+#base,#fog{left:0;top:0;width:100%;height:100%}
+#fog{z-index:1000}
+#toks .t{left:0;top:0;height:auto;will-change:transform}
+#toks .t.mine{pointer-events:auto;cursor:grab;filter:drop-shadow(0 0 5px var(--accent))}
+#toks .t.mine.on{cursor:grabbing}
+#empty{position:absolute;inset:0;display:grid;place-items:center;color:var(--muted);text-align:center;padding:24px;margin:0}
+#empty div{max-width:36ch}#empty b{display:block;font-size:20px;color:var(--text);margin-bottom:6px}
+#hint{position:absolute;left:10px;bottom:10px;font-size:12px;color:var(--muted);background:rgba(0,0,0,.55);padding:3px 9px;border-radius:7px;pointer-events:none}
+#who{position:fixed;inset:0;z-index:5000;display:grid;place-items:center;background:rgba(5,8,7,.82);padding:16px}
+#who form{width:min(380px,100%);background:var(--bar);border:1px solid var(--line);border-radius:14px;padding:20px;display:flex;flex-direction:column;gap:12px}
+#who h2{margin:0;font-size:18px}
+#who p{margin:0;color:var(--muted);font-size:13px}
+#who input{font:inherit;color:var(--text);background:#0c110f;border:1px solid var(--line);border-radius:9px;padding:10px 12px;width:100%}
+#who input:focus-visible,#who button:focus-visible,#me:focus-visible,#tabs button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+#who .row{display:flex;gap:8px;justify-content:flex-end;align-items:center}
+#who button{font:inherit;border-radius:9px;padding:9px 16px;cursor:pointer;border:1px solid var(--line);background:transparent;color:var(--muted)}
+#who button.go{background:var(--accent);border-color:var(--accent);color:#1b1508;font-weight:600}
+</style></head><body>
+<header><div id="tabs"></div><button id="me" type="button" hidden></button><div id="live"><i id="dot"></i><span id="st">conectando…</span></div></header>
+<main id="stage"><div id="wrap" hidden><img id="base" alt="Mapa" draggable="false"><div id="toks"></div><img id="fog" alt="" draggable="false" hidden></div><p id="empty">Aguardando o Mestre mostrar o mapa…</p><div id="hint">Roda do mouse ou pinça: zoom · arraste: mover · clique duplo: ajustar</div></main>
+<div id="who" hidden><form id="whof"><h2>Qual o nome do seu personagem?</h2><p>O Mestre vê esse nome e pode deixar você mexer no seu ícone do mapa.</p><input id="whon" type="text" maxlength="24" autocomplete="off" spellcheck="false" aria-label="Nome do personagem" placeholder="Ex.: Dr. Haskell"><div class="row"><button type="button" id="whos">Só assistir</button><button type="submit" class="go">Entrar</button></div></form></div>
+<script>
+(function () {
+  var stage = document.getElementById('stage'), wrap = document.getElementById('wrap'), base = document.getElementById('base'), fog = document.getElementById('fog'), toks = document.getElementById('toks');
+  var empty = document.getElementById('empty'), tabs = document.getElementById('tabs'), live = document.getElementById('live'), st = document.getElementById('st'), hint = document.getElementById('hint');
+  var me = document.getElementById('me'), who = document.getElementById('who'), whof = document.getElementById('whof'), whon = document.getElementById('whon');
+  var state = { maps: [], mine: {}, allow: false }, cur = '', shown = {}, view = { s: 1, x: 0, y: 0 }, fit = { x: 0, y: 0, w: 0, h: 0 }, T = {}, lastSse = 0, ar = 0;
+  var SITE = true, BASE = '', WSU = '', wantMap = '', none = false;
+  var mem = {}, ws = null, es = null, myName = '', watchOnly = false, running = false, lastTs = 0, drag = null;
+  function kv(k, v) { try { if (v === undefined) return localStorage.getItem(k) || mem[k] || ''; localStorage.setItem(k, v); } catch (_) { if (v === undefined) return mem[k] || ''; } mem[k] = v; return v; }
+  if (SITE) {
+    /* site no GitHub Pages: o endereço da mesa vem no link, depois do # (nunca vai para o servidor do site) */
+    var hp = new URLSearchParams((location.hash || '').replace(/^#/, '')), hh = hp.get('h') || '', kk = hp.get('k') || '';
+    if (/^[a-z0-9.-]+(:[0-9]{1,5})?$/i.test(hh) && /^[a-f0-9]{12,64}$/.test(kk)) { BASE = 'https://' + hh + '/m/' + kk + '/'; WSU = 'wss://' + hh + '/m/' + kk + '/ws'; wantMap = hp.get('m') || ''; }
+    else none = true;
+  } else {
+    WSU = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + location.pathname.replace(/[^/]*$/, '') + 'ws';
+  }
+  var cid = kv('mapa.cid');
+  if (!/^[a-f0-9]{32}$/.test(cid)) {
+    var a = new Uint8Array(16); (window.crypto || window.msCrypto).getRandomValues(a);
+    cid = Array.prototype.map.call(a, function (b) { return (b < 16 ? '0' : '') + b.toString(16); }).join(''); kv('mapa.cid', cid);
+  }
+  myName = kv('mapa.nome');
+  function note(title, text) {
+    empty.textContent = ''; var d = document.createElement('div'), b = document.createElement('b'), p = document.createElement('span');
+    b.textContent = title; p.textContent = text; d.appendChild(b); d.appendChild(p); empty.appendChild(d);
+  }
+  function setLive(on, text) {
+    live.className = on ? 'on' : ''; st.textContent = text;
+    if (SITE && !none && !state.maps.length) {
+      if (on) note('Você está na mesa', 'Aguardando o Mestre mostrar o mapa…');
+      else note('Não consegui falar com a mesa', 'O Mestre precisa estar com o app aberto e o link da internet ligado. Se ele gerou outro link, peça o novo.');
+    }
+  }
+  function apply() { wrap.style.transform = 'translate(' + view.x + 'px,' + view.y + 'px) scale(' + view.s + ')'; }
+  function reset() { view = { s: 1, x: 0, y: 0 }; apply(); }
+  function layout() {
+    if (!ar) return;
+    var W = stage.clientWidth, H = stage.clientHeight, w = W, h = W / ar;
+    if (h > H) { h = H; w = H * ar; }
+    fit = { x: (W - w) / 2, y: (H - h) / 2, w: w, h: h };
+    wrap.style.left = fit.x + 'px'; wrap.style.top = fit.y + 'px'; wrap.style.width = w + 'px'; wrap.style.height = h + 'px';
+    Object.keys(T).forEach(function (id) { place(T[id]); });
+  }
+  function zoomAt(px, py, k) {
+    var s = Math.max(1, Math.min(10, view.s * k)); k = s / view.s; px -= fit.x; py -= fit.y;
+    view.x = px - (px - view.x) * k; view.y = py - (py - view.y) * k; view.s = s;
+    if (s === 1) { view.x = 0; view.y = 0; }
+    apply();
+  }
+  function pick() {
+    var want = SITE ? wantMap : (location.hash || '').replace('#', '');
+    return state.maps.filter(function (x) { return x.id === cur; })[0] || state.maps.filter(function (x) { return String(x.n) === want; })[0] || state.maps[0] || null;
+  }
+  /* ícones: cada um tem posição atual (x,y) e alvo (tx,ty); um laço a cada quadro aproxima um do outro,
+     então o movimento fica suave mesmo que cheguem poucas atualizações por segundo */
+  function place(t) { t.el.style.transform = 'translate(' + (t.x * fit.w / 100) + 'px,' + (t.y * fit.h / 100) + 'px)'; }
+  function loop(now) {
+    running = false;
+    var dt = Math.min(100, Math.max(1, now - (lastTs || now))); lastTs = now;
+    var k = 1 - Math.exp(-dt / 55), more = false;
+    Object.keys(T).forEach(function (id) {
+      var t = T[id]; if (t.drag) return;
+      var dx = t.tx - t.x, dy = t.ty - t.y;
+      if (Math.abs(dx) < 0.004 && Math.abs(dy) < 0.004) { if (dx || dy) { t.x = t.tx; t.y = t.ty; place(t); } return; }
+      t.x += dx * k; t.y += dy * k; place(t); more = true;
+    });
+    if (more) kick(); else lastTs = 0;
+  }
+  function kick() { if (!running) { running = true; requestAnimationFrame(loop); } }
+  function tokens(m) {
+    var seen = {}, mine = {}; (state.mine[m.id] || []).forEach(function (i) { mine[i] = 1; });
+    (m.tokens || []).forEach(function (d, i) {
+      seen[d.id] = 1;
+      var t = T[d.id];
+      if (!t) {
+        var e = document.createElement('img'); e.className = 't'; e.draggable = false; e.alt = ''; e.style.position = 'absolute'; toks.appendChild(e);
+        t = T[d.id] = { id: d.id, el: e, x: d.x, y: d.y, tx: d.x, ty: d.y, cx: d.cx, cy: d.cy, key: '' }; bindDrag(t);
+      }
+      if (t.key !== d.key) { t.key = d.key; t.el.src = BASE + 'img/' + encodeURIComponent(m.id) + '/s/' + d.key; }
+      t.mapId = m.id; t.w = d.w; t.el.style.width = d.w + '%'; t.el.style.zIndex = 10 + i;
+      var ok = !!mine[d.id] && state.allow && !watchOnly && !!ws;
+      t.el.className = 't' + (ok ? ' mine' : '') + (t.drag ? ' on' : ''); t.mine = ok;
+      if (!t.drag) { t.tx = d.x; t.ty = d.y; t.cx = d.cx; t.cy = d.cy; } else { t.pend = d; }
+    });
+    Object.keys(T).forEach(function (id) { if (!seen[id]) { T[id].el.remove(); delete T[id]; } });
+    kick();
+  }
+  function clearTokens() { Object.keys(T).forEach(function (id) { T[id].el.remove(); delete T[id]; }); }
+  /* arrastar o próprio ícone: o app confere tudo (dono, neblina, limites); aqui só se pede e se mostra na hora */
+  function bindDrag(t) {
+    var el = t.el, sx = 0, sy = 0, bx = 0, by = 0, last = 0;
+    el.addEventListener('pointerdown', function (e) {
+      if (!t.mine || e.button > 0) return;
+      e.stopPropagation(); e.preventDefault();
+      try { el.setPointerCapture(e.pointerId); } catch (_) { /* sem captura */ }
+      drag = t; t.drag = true; t.pend = null; sx = e.clientX; sy = e.clientY; bx = t.x; by = t.y; el.className = 't mine on'; hint.hidden = true;
+    });
+    el.addEventListener('pointermove', function (e) {
+      if (!t.drag) return;
+      var r = wrap.getBoundingClientRect(); if (!r.width) return;
+      var dx = (e.clientX - sx) / r.width * 100, dy = (e.clientY - sy) / r.height * 100;
+      var ncx = Math.max(0, Math.min(100, t.cx + dx)), ncy = Math.max(0, Math.min(100, t.cy + dy));
+      dx = ncx - t.cx; dy = ncy - t.cy;
+      t.x = bx + dx; t.y = by + dy; t.tx = t.x; t.ty = t.y; place(t);
+      var now = Date.now();
+      if (now - last >= 30) { last = now; send({ t: 'mv', m: t.mapId, id: t.id, cx: ncx, cy: ncy }); t.sent = { cx: ncx, cy: ncy }; }
+      t.want = { cx: ncx, cy: ncy };
+    });
+    function end(e) {
+      if (!t.drag) return;
+      t.drag = false; drag = null; el.className = 't' + (t.mine ? ' mine' : '');
+      if (t.want) send({ t: 'mv', m: t.mapId, id: t.id, cx: t.want.cx, cy: t.want.cy, end: 1 });
+      t.want = null;
+      if (t.pend) { t.tx = t.pend.x; t.ty = t.pend.y; t.cx = t.pend.cx; t.cy = t.pend.cy; t.pend = null; kick(); }
+    }
+    el.addEventListener('pointerup', end); el.addEventListener('pointercancel', end);
+  }
+  function draw() {
+    var m = pick();
+    tabs.textContent = '';
+    if (state.maps.length > 1) {
+      state.maps.forEach(function (x) {
+        var b = document.createElement('button'); b.textContent = x.n + ' · ' + x.name; if (m && x.id === m.id) b.className = 'on';
+        b.onclick = function () { cur = x.id; reset(); shown = {}; clearTokens(); draw(); }; tabs.appendChild(b);
+      });
+    } else if (m) { var t = document.createElement('span'); t.className = 't'; t.textContent = m.name; tabs.appendChild(t); }
+    if (!m) { wrap.hidden = true; empty.hidden = false; return; }
+    if (cur !== m.id) { cur = m.id; reset(); shown = {}; clearTokens(); }
+    if (shown.base !== m.rev) {
+      var pre = new Image(), rev = m.rev, id = m.id;
+      pre.onload = function () {
+        var p = pick(); if (!p || p.id !== id) return;
+        base.src = pre.src; shown.base = rev; ar = pre.naturalWidth / pre.naturalHeight; layout(); wrap.hidden = false; empty.hidden = true; apply();
+      };
+      pre.src = BASE + 'img/' + encodeURIComponent(m.id) + '/base?v=' + m.rev;
+    }
+    if (shown.fog !== m.fog) {
+      if (!m.fog) { fog.hidden = true; fog.removeAttribute('src'); shown.fog = 0; }
+      else {
+        var pf = new Image(), fr = m.fog, fid = m.id;
+        pf.onload = function () { var p = pick(); if (!p || p.id !== fid) return; fog.src = pf.src; fog.hidden = false; shown.fog = fr; };
+        pf.src = BASE + 'img/' + encodeURIComponent(m.id) + '/fog?v=' + m.fog;
+      }
+    }
+    tokens(m);
+  }
+  function setState(s) { state = { maps: s.maps || [], mine: s.mine || {}, allow: !!s.allow }; draw(); }
+  function onMsg(m) {
+    if (m.t === 'state') { lastSse = Date.now(); setState(m); }
+    else if (m.t === 'tok') {
+      var mp = state.maps.filter(function (x) { return x.id === m.id; })[0]; if (!mp) return;
+      mp.tokens = m.tokens; state.mine[m.id] = m.mine || []; state.allow = !!m.allow;
+      var p = pick(); if (p && p.id === m.id) tokens(p);
+    }
+  }
+  function send(o) { if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify(o)); } catch (_) { /* conexão caindo */ } } }
+  function hello() { if (myName && !watchOnly) send({ t: 'hello', cid: cid, name: myName }); }
+  function poll() {
+    fetch(BASE + 'state', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (s) { setLive(true, 'ao vivo (só leitura)'); setState(s); })
+      .catch(function () { setLive(false, 'reconectando…'); });
+  }
+  setInterval(function () { if (!ws && Date.now() - lastSse > 6000) poll(); }, 2500);
+  setInterval(function () { send({ t: 'ping' }); }, 20000);
+  function sse() {
+    if (es) return;
+    es = new EventSource(BASE + 'events');
+    es.addEventListener('state', function (e) { var s; try { s = JSON.parse(e.data); } catch (_) { return; } lastSse = Date.now(); setLive(true, 'ao vivo (só leitura)'); setState(s); });
+    es.onopen = function () { setLive(true, 'ao vivo (só leitura)'); };
+    es.onerror = function () { setLive(false, 'reconectando…'); };
+    poll();
+  }
+  /* WebSocket primeiro (rápido e de mão dupla); se a rede não deixar, cai para o modo só leitura */
+  function connect() {
+    var url = WSU, opened = false, w;
+    try { w = new WebSocket(url); } catch (_) { sse(); setTimeout(connect, 20000); return; }
+    var to = setTimeout(function () { if (!opened) { try { w.close(); } catch (_) { /* já fechou */ } } }, 5000);
+    w.onopen = function () { opened = true; clearTimeout(to); ws = w; if (es) { es.close(); es = null; } setLive(true, 'ao vivo'); hello(); };
+    w.onmessage = function (e) { var m; try { m = JSON.parse(e.data); } catch (_) { return; } onMsg(m); };
+    w.onclose = function () {
+      clearTimeout(to); if (ws === w) ws = null;
+      if (opened) { setLive(false, 'reconectando…'); } else { sse(); }
+      setTimeout(connect, opened ? 1200 : 15000);
+    };
+  }
+  function showMe() { me.hidden = false; me.textContent = watchOnly || !myName ? 'Só assistindo · entrar' : 'Você: ' + myName + ' · trocar'; me.title = 'Mudar o nome do personagem'; }
+  function ask() { whon.value = myName || ''; who.hidden = false; setTimeout(function () { try { whon.focus(); whon.select(); } catch (_) { /* sem foco */ } }, 30); }
+  whof.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var n = whon.value.replace(/[<>]/g, '').split(' ').filter(Boolean).join(' ').trim().slice(0, 24);
+    if (!n) { whon.focus(); return; }
+    myName = n; watchOnly = false; kv('mapa.nome', n); who.hidden = true; showMe(); hello(); if (pick()) tokens(pick());
+  });
+  document.getElementById('whos').addEventListener('click', function () { watchOnly = true; who.hidden = true; showMe(); if (pick()) tokens(pick()); });
+  me.addEventListener('click', ask);
+  if (!myName) ask();
+  showMe();
+  stage.addEventListener('wheel', function (e) { e.preventDefault(); var r = stage.getBoundingClientRect(); zoomAt(e.clientX - r.left, e.clientY - r.top, Math.exp(-e.deltaY * 0.0015)); }, { passive: false });
+  var ptr = {};
+  stage.addEventListener('pointerdown', function (e) { stage.setPointerCapture(e.pointerId); ptr[e.pointerId] = { x: e.clientX, y: e.clientY }; stage.className = 'drag'; hint.hidden = true; });
+  stage.addEventListener('pointermove', function (e) {
+    var p = ptr[e.pointerId]; if (!p) return;
+    var ids = Object.keys(ptr), r = stage.getBoundingClientRect();
+    if (ids.length === 2) {
+      var o = ptr[ids[0] === String(e.pointerId) ? ids[1] : ids[0]];
+      var d0 = Math.hypot(p.x - o.x, p.y - o.y); p.x = e.clientX; p.y = e.clientY;
+      var d1 = Math.hypot(p.x - o.x, p.y - o.y);
+      if (d0 > 0) zoomAt((p.x + o.x) / 2 - r.left, (p.y + o.y) / 2 - r.top, d1 / d0);
+    } else if (view.s > 1) { view.x += e.clientX - p.x; view.y += e.clientY - p.y; p.x = e.clientX; p.y = e.clientY; apply(); }
+    else { p.x = e.clientX; p.y = e.clientY; }
+  });
+  function up(e) { delete ptr[e.pointerId]; if (!Object.keys(ptr).length) stage.className = ''; }
+  stage.addEventListener('pointerup', up); stage.addEventListener('pointercancel', up);
+  stage.addEventListener('dblclick', reset);
+  window.addEventListener('resize', function () { layout(); });
+  window.addEventListener('hashchange', function () { if (SITE) { location.reload(); return; } cur = ''; draw(); });
+  if (none) {
+    note('Você não está em nenhuma mesa', 'Abra o link que o Mestre mandou para você. Seu nome fica salvo neste navegador, então só precisa digitar uma vez.');
+    hint.hidden = true; setLive(false, 'sem mesa');
+  } else connect();
+})();
+</script></body></html>
