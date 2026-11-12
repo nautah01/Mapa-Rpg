@@ -56,7 +56,8 @@ main.drag{cursor:grabbing}
   if (SITE) {
     /* site no GitHub Pages: o endereço da mesa vem no link, depois do # (nunca vai para o servidor do site) */
     var hp = new URLSearchParams((location.hash || '').replace(/^#/, '')), hh = hp.get('h') || '', kk = hp.get('k') || '';
-    if (/^[a-z0-9.-]+(:[0-9]{1,5})?$/i.test(hh) && /^[a-f0-9]{12,64}$/.test(kk)) { BASE = 'https://' + hh + '/m/' + kk + '/'; WSU = 'wss://' + hh + '/m/' + kk + '/ws'; wantMap = hp.get('m') || ''; }
+    if (/^[a-z0-9.-]+(:[0-9]{1,5})?$/i.test(hh) && /^[a-f0-9]{12,64}$/.test(kk)) { var lo = location.protocol === 'http:'; /* http só serve para testar em localhost */
+      BASE = (lo ? 'http://' : 'https://') + hh + '/m/' + kk + '/'; WSU = (lo ? 'ws://' : 'wss://') + hh + '/m/' + kk + '/ws'; wantMap = hp.get('m') || ''; }
     else none = true;
   } else {
     WSU = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + location.pathname.replace(/[^/]*$/, '') + 'ws';
@@ -73,7 +74,7 @@ main.drag{cursor:grabbing}
   }
   function setLive(on, text) {
     live.className = on ? 'on' : ''; st.textContent = text;
-    if (SITE && !none && !state.maps.length) {
+    if (SITE && !none && !state.maps.length && !state.hidden) {
       if (on) note('Você está na mesa', 'Aguardando o Mestre mostrar o mapa…');
       else note('Não consegui falar com a mesa', 'O Mestre precisa estar com o app aberto e o link da internet ligado. Se ele gerou outro link, peça o novo.');
     }
@@ -123,7 +124,7 @@ main.drag{cursor:grabbing}
         var e = document.createElement('img'); e.className = 't'; e.draggable = false; e.alt = ''; e.style.position = 'absolute'; toks.appendChild(e);
         t = T[d.id] = { id: d.id, el: e, x: d.x, y: d.y, tx: d.x, ty: d.y, cx: d.cx, cy: d.cy, key: '' }; bindDrag(t);
       }
-      if (t.key !== d.key) { t.key = d.key; t.el.src = BASE + 'img/' + encodeURIComponent(m.id) + '/s/' + d.key; }
+      if (t.key !== d.key) { t.key = d.key; t.el.src = BASE + 'img/' + encodeURIComponent(m.id) + '/s/' + d.key + '?c=' + cid; }
       t.mapId = m.id; t.w = d.w; t.el.style.width = d.w + '%'; t.el.style.zIndex = 10 + i;
       var ok = !!mine[d.id] && state.allow && !watchOnly && !!ws;
       t.el.className = 't' + (ok ? ' mine' : '') + (t.drag ? ' on' : ''); t.mine = ok;
@@ -171,7 +172,7 @@ main.drag{cursor:grabbing}
         b.onclick = function () { cur = x.id; reset(); shown = {}; clearTokens(); draw(); }; tabs.appendChild(b);
       });
     } else if (m) { var t = document.createElement('span'); t.className = 't'; t.textContent = m.name; tabs.appendChild(t); }
-    if (!m) { wrap.hidden = true; empty.hidden = false; return; }
+    if (!m) { wrap.hidden = true; empty.hidden = false; base.removeAttribute('src'); fog.removeAttribute('src'); clearTokens(); shown = {}; cur = ''; return; }
     if (cur !== m.id) { cur = m.id; reset(); shown = {}; clearTokens(); }
     if (shown.base !== m.rev) {
       var pre = new Image(), rev = m.rev, id = m.id;
@@ -179,21 +180,22 @@ main.drag{cursor:grabbing}
         var p = pick(); if (!p || p.id !== id) return;
         base.src = pre.src; shown.base = rev; ar = pre.naturalWidth / pre.naturalHeight; layout(); wrap.hidden = false; empty.hidden = true; apply();
       };
-      pre.src = BASE + 'img/' + encodeURIComponent(m.id) + '/base?v=' + m.rev;
+      pre.src = BASE + 'img/' + encodeURIComponent(m.id) + '/base?v=' + m.rev + '&c=' + cid;
     }
     if (shown.fog !== m.fog) {
       if (!m.fog) { fog.hidden = true; fog.removeAttribute('src'); shown.fog = 0; }
       else {
         var pf = new Image(), fr = m.fog, fid = m.id;
         pf.onload = function () { var p = pick(); if (!p || p.id !== fid) return; fog.src = pf.src; fog.hidden = false; shown.fog = fr; };
-        pf.src = BASE + 'img/' + encodeURIComponent(m.id) + '/fog?v=' + m.fog;
+        pf.src = BASE + 'img/' + encodeURIComponent(m.id) + '/fog?v=' + m.fog + '&c=' + cid;
       }
     }
     tokens(m);
   }
-  function setState(s) { state = { maps: s.maps || [], mine: s.mine || {}, allow: !!s.allow }; draw(); }
+  function setState(s) { state = { maps: s.maps || [], mine: s.mine || {}, allow: !!s.allow, hidden: s.hidden || 0 }; draw(); if (!state.maps.length && state.hidden) note('Nenhum mapa liberado para você', 'O Mestre ainda não liberou um mapa para o seu nome. Assim que ele liberar, o mapa aparece aqui.'); else if (!state.maps.length) note('Aguardando o Mestre', 'O mapa aparece aqui assim que ele mostrar.'); }
   function onMsg(m) {
     if (m.t === 'state') { lastSse = Date.now(); setState(m); }
+    else if (m.t === 'kick') { myName = ''; watchOnly = false; kv('mapa.nome', ''); showMe(); ask(); if (pick()) tokens(pick()); }
     else if (m.t === 'tok') {
       var mp = state.maps.filter(function (x) { return x.id === m.id; })[0]; if (!mp) return;
       mp.tokens = m.tokens; state.mine[m.id] = m.mine || []; state.allow = !!m.allow;
@@ -203,14 +205,14 @@ main.drag{cursor:grabbing}
   function send(o) { if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify(o)); } catch (_) { /* conexão caindo */ } } }
   function hello() { if (myName && !watchOnly) send({ t: 'hello', cid: cid, name: myName }); }
   function poll() {
-    fetch(BASE + 'state', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (s) { setLive(true, 'ao vivo (só leitura)'); setState(s); })
+    fetch(BASE + 'state?c=' + cid, { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (s) { setLive(true, 'ao vivo (só leitura)'); setState(s); })
       .catch(function () { setLive(false, 'reconectando…'); });
   }
   setInterval(function () { if (!ws && Date.now() - lastSse > 6000) poll(); }, 2500);
   setInterval(function () { send({ t: 'ping' }); }, 20000);
   function sse() {
     if (es) return;
-    es = new EventSource(BASE + 'events');
+    es = new EventSource(BASE + 'events?c=' + cid);
     es.addEventListener('state', function (e) { var s; try { s = JSON.parse(e.data); } catch (_) { return; } lastSse = Date.now(); setLive(true, 'ao vivo (só leitura)'); setState(s); });
     es.onopen = function () { setLive(true, 'ao vivo (só leitura)'); };
     es.onerror = function () { setLive(false, 'reconectando…'); };
@@ -218,7 +220,7 @@ main.drag{cursor:grabbing}
   }
   /* WebSocket primeiro (rápido e de mão dupla); se a rede não deixar, cai para o modo só leitura */
   function connect() {
-    var url = WSU, opened = false, w;
+    var url = WSU + '?c=' + cid, opened = false, w;
     try { w = new WebSocket(url); } catch (_) { sse(); setTimeout(connect, 20000); return; }
     var to = setTimeout(function () { if (!opened) { try { w.close(); } catch (_) { /* já fechou */ } } }, 5000);
     w.onopen = function () { opened = true; clearTimeout(to); ws = w; if (es) { es.close(); es = null; } setLive(true, 'ao vivo'); hello(); };
