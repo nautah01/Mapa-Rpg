@@ -31,10 +31,16 @@ main.drag{cursor:grabbing}
 #empty{position:absolute;inset:0;display:grid;place-items:center;color:var(--muted);text-align:center;padding:24px;margin:0}
 #empty div{max-width:36ch}#empty b{display:block;font-size:20px;color:var(--text);margin-bottom:6px}
 #hint{position:absolute;left:10px;bottom:10px;font-size:12px;color:var(--muted);background:rgba(0,0,0,.55);padding:3px 9px;border-radius:7px;pointer-events:none}
-#who{position:fixed;inset:0;z-index:5000;display:grid;place-items:center;background:rgba(5,8,7,.82);padding:16px}
-#who form{width:min(380px,100%);background:var(--bar);border:1px solid var(--line);border-radius:14px;padding:20px;display:flex;flex-direction:column;gap:12px}
-#who h2{margin:0;font-size:18px}
-#who p{margin:0;color:var(--muted);font-size:13px}
+#mine{display:flex;align-items:center;gap:6px;padding:5px 12px;background:var(--bar);border-bottom:1px solid var(--line);font-size:13px;color:var(--muted);flex:none;overflow-x:auto;white-space:nowrap}
+#mine button{border:1px solid var(--accent);background:#202a24;color:var(--text);border-radius:999px;padding:2px 11px;font:inherit;font-size:13px;cursor:pointer}
+#mine button::before{content:'\25CF  ';color:var(--accent)}
+#toks .t.ping{animation:pg .5s 3}
+@keyframes pg{50%{filter:drop-shadow(0 0 14px var(--accent)) brightness(1.6)}}
+#who,#gone{position:fixed;inset:0;z-index:5000;display:grid;place-items:center;background:rgba(5,8,7,.82);padding:16px}
+#gone p,#gone h2{margin:0}#gone .box,#who form{width:min(380px,100%);background:var(--bar);border:1px solid var(--line);border-radius:14px;padding:20px;display:flex;flex-direction:column;gap:12px}
+#who h2,#gone h2{margin:0;font-size:18px}
+#who p,#gone p{margin:0;color:var(--muted);font-size:13px}
+#gone[hidden]{display:none}#gone{z-index:6000}#gone button{font:inherit;border-radius:9px;padding:9px 16px;cursor:pointer;border:1px solid var(--accent);background:var(--accent);color:#1b1508;font-weight:600}
 #who input{font:inherit;color:var(--text);background:#0c110f;border:1px solid var(--line);border-radius:9px;padding:10px 12px;width:100%}
 #who input:focus-visible,#who button:focus-visible,#me:focus-visible,#tabs button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 #who .row{display:flex;gap:8px;justify-content:flex-end;align-items:center}
@@ -42,7 +48,9 @@ main.drag{cursor:grabbing}
 #who button.go{background:var(--accent);border-color:var(--accent);color:#1b1508;font-weight:600}
 </style></head><body>
 <header><div id="tabs"></div><button id="me" type="button" hidden></button><div id="live"><i id="dot"></i><span id="st">conectando…</span></div></header>
+<div id="mine" hidden></div>
 <main id="stage"><div id="wrap" hidden><img id="base" alt="Mapa" draggable="false"><div id="toks"></div><img id="fog" alt="" draggable="false" hidden></div><p id="empty">Aguardando o Mestre mostrar o mapa…</p><div id="hint">Roda do mouse ou pinça: zoom · arraste: mover · clique duplo: ajustar</div></main>
+<div id="gone" hidden><div class="box"><h2>Você saiu da mesa</h2><p>O Mestre removeu o seu acesso. Para voltar, reconecte à mesa.</p><button id="goneb" type="button">Reconectar à mesa</button></div></div>
 <div id="who" hidden><form id="whof"><h2>Qual o nome do seu personagem?</h2><p>O Mestre vê esse nome e pode deixar você mexer no seu ícone do mapa.</p><input id="whon" type="text" maxlength="24" autocomplete="off" spellcheck="false" aria-label="Nome do personagem" placeholder="Ex.: Dr. Haskell"><div class="row"><button type="button" id="whos">Só assistir</button><button type="submit" class="go">Entrar</button></div></form></div>
 <script>
 (function () {
@@ -50,14 +58,16 @@ main.drag{cursor:grabbing}
   var empty = document.getElementById('empty'), tabs = document.getElementById('tabs'), live = document.getElementById('live'), st = document.getElementById('st'), hint = document.getElementById('hint');
   var me = document.getElementById('me'), who = document.getElementById('who'), whof = document.getElementById('whof'), whon = document.getElementById('whon');
   var state = { maps: [], mine: {}, allow: false }, cur = '', shown = {}, view = { s: 1, x: 0, y: 0 }, fit = { x: 0, y: 0, w: 0, h: 0 }, T = {}, lastSse = 0, ar = 0;
-  var SITE = true, BASE = '', WSU = '', wantMap = '', none = false;
+  var kickedNow = false, gone = document.getElementById('gone'), mineEl = document.getElementById('mine');
+  var SITE = true, BASE = '', WSU = '', wantMap = '', none = false, GIST = '', GAPI = '', KEY = '', fails = 0, hostAt = 0, lo = false;
   var mem = {}, ws = null, es = null, myName = '', watchOnly = false, running = false, lastTs = 0, drag = null;
   function kv(k, v) { try { if (v === undefined) return localStorage.getItem(k) || mem[k] || ''; localStorage.setItem(k, v); } catch (_) { if (v === undefined) return mem[k] || ''; } mem[k] = v; return v; }
   if (SITE) {
     /* site no GitHub Pages: o endereço da mesa vem no link, depois do # (nunca vai para o servidor do site) */
-    var hp = new URLSearchParams((location.hash || '').replace(/^#/, '')), hh = hp.get('h') || '', kk = hp.get('k') || '';
-    if (/^[a-z0-9.-]+(:[0-9]{1,5})?$/i.test(hh) && /^[a-f0-9]{12,64}$/.test(kk)) { var lo = location.protocol === 'http:'; /* http só serve para testar em localhost */
-      BASE = (lo ? 'http://' : 'https://') + hh + '/m/' + kk + '/'; WSU = (lo ? 'ws://' : 'wss://') + hh + '/m/' + kk + '/ws'; wantMap = hp.get('m') || ''; }
+    var hp = new URLSearchParams((location.hash || '').replace(/^#/, '')), hh = hp.get('h') || '', kk = hp.get('k') || '', gg = hp.get('g') || '';
+    KEY = kk; lo = location.protocol === 'http:'; /* http só serve para testar em localhost */
+    if (/^[a-f0-9]{12,64}$/.test(kk) && /^[a-f0-9]{20,40}$/.test(gg)) { GIST = gg; GAPI = (lo && hp.get('a')) || 'https://api.github.com'; wantMap = hp.get('m') || ''; }
+    else if (/^[a-z0-9.-]+(:[0-9]{1,5})?$/i.test(hh) && /^[a-f0-9]{12,64}$/.test(kk)) { setHost(hh); wantMap = hp.get('m') || ''; }
     else none = true;
   } else {
     WSU = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + location.pathname.replace(/[^/]*$/, '') + 'ws';
@@ -68,13 +78,14 @@ main.drag{cursor:grabbing}
     cid = Array.prototype.map.call(a, function (b) { return (b < 16 ? '0' : '') + b.toString(16); }).join(''); kv('mapa.cid', cid);
   }
   myName = kv('mapa.nome');
+  function GIST_NOTE() { return GIST && (st.textContent === 'mesa fechada' || st.textContent === 'sem GitHub'); }
   function note(title, text) {
     empty.textContent = ''; var d = document.createElement('div'), b = document.createElement('b'), p = document.createElement('span');
     b.textContent = title; p.textContent = text; d.appendChild(b); d.appendChild(p); empty.appendChild(d);
   }
   function setLive(on, text) {
     live.className = on ? 'on' : ''; st.textContent = text;
-    if (SITE && !none && !state.maps.length && !state.hidden) {
+    if (SITE && !none && !GIST_NOTE() && !state.maps.length && !state.hidden) {
       if (on) note('Você está na mesa', 'Aguardando o Mestre mostrar o mapa…');
       else note('Não consegui falar com a mesa', 'O Mestre precisa estar com o app aberto e o link da internet ligado. Se ele gerou outro link, peça o novo.');
     }
@@ -131,7 +142,20 @@ main.drag{cursor:grabbing}
       if (!t.drag) { t.tx = d.x; t.ty = d.y; t.cx = d.cx; t.cy = d.cy; } else { t.pend = d; }
     });
     Object.keys(T).forEach(function (id) { if (!seen[id]) { T[id].el.remove(); delete T[id]; } });
+    mineBar(m);
     kick();
+  }
+  /* faixa "Seus ícones": mostra quais ícones este jogador controla neste mapa e, ao clicar, faz o ícone piscar */
+  function mineBar(m) {
+    var ids = (state.mine[m.id] || []), nm = (state.names || {})[m.id] || {};
+    if (!myName || watchOnly) { mineEl.hidden = true; return; }
+    mineEl.hidden = false; mineEl.textContent = '';
+    var lab = document.createElement('span'); lab.textContent = ids.length ? 'Seus ícones:' : 'Você ainda não controla nenhum ícone neste mapa. O Mestre escolhe qual é o seu.'; mineEl.appendChild(lab);
+    ids.forEach(function (id, i) {
+      var b = document.createElement('button'); b.type = 'button'; b.textContent = nm[id] || ('Ícone ' + (i + 1)); b.title = 'Mostrar onde está';
+      b.addEventListener('click', function () { var t = T[id]; if (!t) return; t.el.classList.remove('ping'); void t.el.offsetWidth; t.el.classList.add('ping'); setTimeout(function () { t.el.classList.remove('ping'); }, 1700); });
+      mineEl.appendChild(b);
+    });
   }
   function clearTokens() { Object.keys(T).forEach(function (id) { T[id].el.remove(); delete T[id]; }); }
   /* arrastar o próprio ícone: o app confere tudo (dono, neblina, limites); aqui só se pede e se mostra na hora */
@@ -172,7 +196,7 @@ main.drag{cursor:grabbing}
         b.onclick = function () { cur = x.id; reset(); shown = {}; clearTokens(); draw(); }; tabs.appendChild(b);
       });
     } else if (m) { var t = document.createElement('span'); t.className = 't'; t.textContent = m.name; tabs.appendChild(t); }
-    if (!m) { wrap.hidden = true; empty.hidden = false; base.removeAttribute('src'); fog.removeAttribute('src'); clearTokens(); shown = {}; cur = ''; return; }
+    if (!m) { mineEl.hidden = true; wrap.hidden = true; empty.hidden = false; base.removeAttribute('src'); fog.removeAttribute('src'); clearTokens(); shown = {}; cur = ''; return; }
     if (cur !== m.id) { cur = m.id; reset(); shown = {}; clearTokens(); }
     if (shown.base !== m.rev) {
       var pre = new Image(), rev = m.rev, id = m.id;
@@ -192,18 +216,19 @@ main.drag{cursor:grabbing}
     }
     tokens(m);
   }
-  function setState(s) { state = { maps: s.maps || [], mine: s.mine || {}, allow: !!s.allow, hidden: s.hidden || 0 }; draw(); if (!state.maps.length && state.hidden) note('Nenhum mapa liberado para você', 'O Mestre ainda não liberou um mapa para o seu nome. Assim que ele liberar, o mapa aparece aqui.'); else if (!state.maps.length) note('Aguardando o Mestre', 'O mapa aparece aqui assim que ele mostrar.'); }
+  function setState(s) { state = { maps: s.maps || [], mine: s.mine || {}, names: s.names || {}, allow: !!s.allow, hidden: s.hidden || 0 }; gone.hidden = !s.kicked && !kickedNow; if (s.kicked) kickedNow = true; draw(); if (!state.maps.length && state.hidden) note('Nenhum mapa liberado para você', 'O Mestre ainda não liberou um mapa para o seu nome. Assim que ele liberar, o mapa aparece aqui.'); else if (!state.maps.length) note('Aguardando o Mestre', 'O mapa aparece aqui assim que ele mostrar.'); }
   function onMsg(m) {
     if (m.t === 'state') { lastSse = Date.now(); setState(m); }
-    else if (m.t === 'kick') { myName = ''; watchOnly = false; kv('mapa.nome', ''); showMe(); ask(); if (pick()) tokens(pick()); }
+    else if (m.t === 'kick') { kickedNow = true; gone.hidden = false; who.hidden = true; }
     else if (m.t === 'tok') {
       var mp = state.maps.filter(function (x) { return x.id === m.id; })[0]; if (!mp) return;
-      mp.tokens = m.tokens; state.mine[m.id] = m.mine || []; state.allow = !!m.allow;
+      mp.tokens = m.tokens; state.mine[m.id] = m.mine || []; (state.names = state.names || {})[m.id] = m.names || {}; state.allow = !!m.allow;
       var p = pick(); if (p && p.id === m.id) tokens(p);
     }
   }
   function send(o) { if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify(o)); } catch (_) { /* conexão caindo */ } } }
-  function hello() { if (myName && !watchOnly) send({ t: 'hello', cid: cid, name: myName }); }
+  function hello(rejoin) { if (myName && !watchOnly) send(rejoin === true ? { t: 'hello', cid: cid, name: myName, rejoin: true } : { t: 'hello', cid: cid, name: myName }); }
+  document.getElementById('goneb').addEventListener('click', function () { if (!myName) { gone.hidden = true; kickedNow = false; ask(); return; } kickedNow = false; gone.hidden = true; hello(true); });
   function poll() {
     fetch(BASE + 'state?c=' + cid, { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (s) { setLive(true, 'ao vivo (só leitura)'); setState(s); })
       .catch(function () { setLive(false, 'reconectando…'); });
@@ -218,15 +243,36 @@ main.drag{cursor:grabbing}
     es.onerror = function () { setLive(false, 'reconectando…'); };
     poll();
   }
-  /* WebSocket primeiro (rápido e de mão dupla); se a rede não deixar, cai para o modo só leitura */
+  function setHost(h) { BASE = (lo ? 'http://' : 'https://') + h + '/m/' + KEY + '/'; WSU = (lo ? 'ws://' : 'wss://') + h + '/m/' + KEY + '/ws'; }
+  /* Link fixo: o endereço atual do túnel está num arquivo (gist) do GitHub do Mestre */
+  function lookHost(done) {
+    hostAt = Date.now();
+    fetch(GAPI + '/gists/' + GIST, { cache: 'no-store' }).then(function (r) { if (!r.ok) throw new Error('http'); return r.json(); }).then(function (j) {
+      var f = j && j.files && j.files['mesa.json'], d = null;
+      try { d = JSON.parse(f && f.content || ''); } catch (_) { d = null; }
+      if (!d) throw new Error('vazio');
+      done(/^[a-z0-9.-]+(:[0-9]{1,5})?$/i.test(String(d.h || '')) ? String(d.h) : '');
+    }).catch(function () { done(false); });
+  }
   function connect() {
+    if (!GIST || (BASE && fails < 2)) { dial(); return; }
+    var wait = Math.max(0, 45000 - (Date.now() - hostAt));
+    if (BASE && wait) { setTimeout(connect, wait); return; }
+    lookHost(function (h) {
+      if (h === false) { setLive(false, 'sem GitHub'); if (!state.maps.length) note('Não consegui falar com o GitHub', 'Esta página tenta de novo sozinha. Se continuar, espere alguns minutos.'); setTimeout(connect, 20000); return; }
+      if (!h) { BASE = ''; setLive(false, 'mesa fechada'); if (!state.maps.length) note('A mesa está fechada', 'O Mestre ainda não abriu a mesa. Esta página tenta de novo sozinha.'); setTimeout(connect, 12000); return; }
+      fails = 0; setHost(h); dial();
+    });
+  }
+  /* WebSocket primeiro (rápido e de mão dupla); se a rede não deixar, cai para o modo só leitura */
+  function dial() {
     var url = WSU + '?c=' + cid, opened = false, w;
     try { w = new WebSocket(url); } catch (_) { sse(); setTimeout(connect, 20000); return; }
     var to = setTimeout(function () { if (!opened) { try { w.close(); } catch (_) { /* já fechou */ } } }, 5000);
-    w.onopen = function () { opened = true; clearTimeout(to); ws = w; if (es) { es.close(); es = null; } setLive(true, 'ao vivo'); hello(); };
+    w.onopen = function () { opened = true; fails = 0; clearTimeout(to); ws = w; if (es) { es.close(); es = null; } setLive(true, 'ao vivo'); hello(); };
     w.onmessage = function (e) { var m; try { m = JSON.parse(e.data); } catch (_) { return; } onMsg(m); };
     w.onclose = function () {
-      clearTimeout(to); if (ws === w) ws = null;
+      clearTimeout(to); if (ws === w) ws = null; fails++;
       if (opened) { setLive(false, 'reconectando…'); } else { sse(); }
       setTimeout(connect, opened ? 1200 : 15000);
     };
